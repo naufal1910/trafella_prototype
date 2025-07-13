@@ -35,9 +35,52 @@ logging.basicConfig(
 logger = logging.getLogger("Trafella")
 logger.info("Application started")
 
+# --- API Key Handling: Store in session_state, not in any file ---
+
+if "SERPAPI_KEY" not in st.session_state or "GOOGLE_API_KEY" not in st.session_state:
+    with st.sidebar.expander("🔑 API Keys Setup", expanded=True):
+        st.markdown("### 🔑 API Keys Required")
+        st.markdown("Please enter your API keys to continue:")
+
+        user_serpapi = st.text_input(
+            "SerpAPI Key",
+            type="password",
+            help="Get your key from https://serpapi.com/manage-api-key",
+            key="serpapi_input"
+        )
+        user_google = st.text_input(
+            "Google API Key",
+            type="password",
+            help="Get your key from https://aistudio.google.com/app/u/1/apikey",
+            key="google_input"
+        )
+
+        if st.button("💾 Save API Keys"):
+            if user_serpapi and user_google:
+                st.session_state["SERPAPI_KEY"] = user_serpapi
+                st.session_state["GOOGLE_API_KEY"] = user_google
+                st.success("API keys saved for this session!")
+                st.rerun()
+            else:
+                st.error("Please enter both API keys")
+
+        st.markdown("---")
+        st.markdown("*Your keys are only stored in your browser for this session and never saved on the server.*")
+
+    st.warning("Please enter your API keys in the sidebar to continue.")
+    st.stop()
+
+# Use keys from session_state
+SERPAPI_KEY = st.session_state["SERPAPI_KEY"]
+GOOGLE_API_KEY = st.session_state["GOOGLE_API_KEY"]
+os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY  # For Gemini agent
+
+# Log API key status (without exposing actual keys)
+logger.info("API keys set in session_state")
+
 # Set up Streamlit UI with a travel-friendly theme
 logger.info("Setting up Streamlit UI")
-st.set_page_config(page_title="🌍 AI Travel Planner", layout="wide")
+st.set_page_config(page_title="🌍 Trafella - Your AI Travel Companion", layout="wide")
 st.markdown(
     """
     <style>
@@ -64,7 +107,7 @@ st.markdown(
 
 # Title and subtitle
 logger.info("Setting up Streamlit UI")
-st.markdown('<h1 class="title">✈️ AI-Powered Travel Planner</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="title">🌍 Trafella - Your AI Travel Companion</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Plan your dream trip with AI! Get personalized recommendations for flights, hotels, and activities.</p>', unsafe_allow_html=True)
 
 # User Inputs Section
@@ -112,7 +155,7 @@ def format_datetime(iso_string):
     """
     try:
         dt = datetime.strptime(iso_string, "%Y-%m-%d %H:%M")
-        return dt.strftime("%b-%d, %Y | %I:%M %p")  # Example: Mar-06, 2025 | 6:20 PM
+        return dt.strftime("%b-%d, %Y | %I:%M %p")  # Example: Jul-13, 2025 | 6:20 PM
     except:
         return "N/A"
 
@@ -125,17 +168,13 @@ departure_date = st.date_input("Departure Date")
 return_date = st.date_input("Return Date")
 
 # Sidebar Setup
-st.sidebar.title("🌎 Travel Assistant")
+st.sidebar.title("🌎 TRAFELLA")
 st.sidebar.subheader("Personalize Your Trip")
 
 # Travel Preferences
 budget = st.sidebar.radio("💰 Budget Preference:", ["Economy", "Standard", "Luxury"])
 flight_class = st.sidebar.radio("✈️ Flight Class:", ["Economy", "Business", "First Class"])
 hotel_rating = st.sidebar.selectbox("🏨 Preferred Hotel Rating:", ["Any", "3⭐", "4⭐", "5⭐"])
-
-SERPAPI_KEY = "867c0d73d26dae01b24aec9e2114baac336672f1eefbb0c50510ef505e14488d"
-GOOGLE_API_KEY = "AIzaSyBjzdwpXUc_h1h4mk6Zw22J7TFxmfJQAyc"
-os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 params = {
         "engine": "google_flights",
@@ -276,7 +315,8 @@ if st.button("🚀 Generate Travel Plan"):
     Generates a travel plan based on user input.
     """
 
-    logger.info("Generate Travel Plan button clicked")
+    datetime_now = datetime.now()
+    logger.info("Generate Travel Plan Start" + str(datetime_now))
     with st.spinner("✈️ Fetching best flight options..."):
         logger.info("Starting flight search")
         flight_data = fetch_flights(source, destination, departure_date, return_date)
@@ -295,8 +335,18 @@ if st.button("🚀 Generate Travel Plan"):
 
     with st.spinner("🏨 Finding hotels & restaurants..."):
         logger.info("Starting hotel/restaurant search")
+        # Try to extract attractions from itinerary, then research, fallback to activity preferences
+        attractions_or_itinerary = ""
+        if 'itinerary' in locals() and hasattr(itinerary, "content") and itinerary.content.strip():
+            attractions_or_itinerary = itinerary.content[:300]
+        elif 'research_results' in locals() and hasattr(research_results, "content") and research_results.content.strip():
+            attractions_or_itinerary = research_results.content[:300]
+        else:
+            attractions_or_itinerary = activity_preferences
+
         hotel_restaurant_prompt = (
-            f"Find the best hotels and restaurants near popular attractions in {destination} for a {travel_theme.lower()} trip. "
+            # f"Find the best hotels and restaurants near popular attractions in {destination} for a {travel_theme.lower()} trip. "
+            f"Find the best hotels and restaurants near these attractions or itinerary points in {destination}: {attractions_or_itinerary}. "
             f"Budget: {budget}. Hotel Rating: {hotel_rating}. Preferred activities: {activity_preferences}."
         )
         hotel_restaurant_results = hotel_restaurant_finder.run(hotel_restaurant_prompt, stream=False)
@@ -387,6 +437,57 @@ if st.button("🚀 Generate Travel Plan"):
     st.subheader("🗺️ Your Personalized Itinerary")
     st.write(itinerary.content)
 
+    logger.info("Travel plan generation complete")
+
+    # --- PDF Download Section ---
+    from fpdf import FPDF
+    import tempfile
+
+    def generate_pdf(flights, research, hotels, itinerary):
+        # Sanitize text to prevent UnicodeEncodeError with fpdf
+        def sanitize(text):
+            return str(text).encode('latin-1', 'replace').decode('latin-1')
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+
+        pdf.cell(0, 10, "Trafella AI Travel Plan", ln=True, align="C")
+        pdf.ln(8)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, "Flight Options:", ln=True)
+        pdf.set_font("Arial", size=11)
+        pdf.multi_cell(0, 8, sanitize(flights))
+        pdf.ln(2)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, "Destination Research:", ln=True)
+        pdf.set_font("Arial", size=11)
+        pdf.multi_cell(0, 8, sanitize(research))
+        pdf.ln(2)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, "Hotels & Restaurants:", ln=True)
+        pdf.set_font("Arial", size=11)
+        pdf.multi_cell(0, 8, sanitize(hotels))
+        pdf.ln(2)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, "Itinerary:", ln=True)
+        pdf.set_font("Arial", size=11)
+        pdf.multi_cell(0, 8, sanitize(itinerary))
+        return pdf
+
+    # Prepare content for PDF
+    flights_str = str(cheapest_flights)
+    research_str = research_results.content if hasattr(research_results, 'content') else str(research_results)
+    hotels_str = hotel_restaurant_results.content if hasattr(hotel_restaurant_results, 'content') else str(hotel_restaurant_results)
+    itinerary_str = itinerary.content if hasattr(itinerary, 'content') else str(itinerary)
+
+    pdf = generate_pdf(flights_str, research_str, hotels_str, itinerary_str)
+    tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    pdf.output(tmp_pdf.name)
+    tmp_pdf.close()
+
+    with open(tmp_pdf.name, "rb") as f:
+        st.download_button("Download Travel Plan as PDF", f.read(), file_name="trafella_travel_plan.pdf", mime="application/pdf")
     logger.info("Travel plan generated successfully")
     st.success("✅ Travel plan generated successfully!")
 
@@ -394,3 +495,4 @@ if st.button("🚀 Generate Travel Plan"):
     logger.info(f"Cheapest flights: {json.dumps(cheapest_flights, indent=2)}")
     logger.info(f"Hotels & Restaurants: {hotel_restaurant_results.content}")
     logger.info(f"Itinerary: {itinerary.content}")
+    logger.info("Generate Travel Plan End" + str(datetime_now))

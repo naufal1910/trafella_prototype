@@ -3,3 +3,4 @@ google-search-results
 agno
 logging
 google-genai
+fpdf
