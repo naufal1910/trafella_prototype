@@ -14,6 +14,7 @@ Powered by:
 4. Advanced travel planning algorithms
 """
 
+# Import necessary libraries
 import streamlit as st
 import json
 import os
@@ -23,6 +24,9 @@ from serpapi.google_search import GoogleSearch
 from agno.agent import Agent
 from agno.tools.serpapi import SerpApiTools
 from agno.models.google import Gemini
+from transformers import MarianMTModel, MarianTokenizer
+import torch
+import time
 
 # Configure logging
 log_filename = datetime.now().strftime("%Y%m%d") + "-trafella.log"
@@ -36,7 +40,6 @@ logger = logging.getLogger("Trafella")
 logger.info("Application started")
 
 # --- API Key Handling: Store in session_state, not in any file ---
-
 if "SERPAPI_KEY" not in st.session_state or "GOOGLE_API_KEY" not in st.session_state:
     with st.sidebar.expander("🔑 API Keys Setup", expanded=True):
         st.markdown("### 🔑 API Keys Required")
@@ -54,6 +57,7 @@ if "SERPAPI_KEY" not in st.session_state or "GOOGLE_API_KEY" not in st.session_s
             help="Get your key from https://aistudio.google.com/app/u/1/apikey",
             key="google_input"
         )
+
 
         if st.button("💾 Save API Keys"):
             if user_serpapi and user_google:
@@ -78,9 +82,67 @@ os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY  # For Gemini agent
 # Log API key status (without exposing actual keys)
 logger.info("API keys set in session_state")
 
-# Set up Streamlit UI with a travel-friendly theme
-logger.info("Setting up Streamlit UI")
-st.set_page_config(page_title="🌍 Trafella - Your AI Travel Companion", layout="wide")
+@st.cache_resource
+def get_translation_model_and_tokenizer():
+    """
+    Loads and caches the translation model and tokenizer.
+    """
+    try:
+        logger.info("Loading translation model and tokenizer...")
+        model_name = 'Helsinki-NLP/opus-mt-en-id'
+        tokenizer = MarianTokenizer.from_pretrained(model_name)
+        model = MarianMTModel.from_pretrained(model_name)
+        logger.info("Translation model and tokenizer loaded successfully.")
+        return model, tokenizer
+    except Exception as e:
+        st.error(f"Failed to load translation model: {e}")
+        logger.error(f"Failed to load translation model: {e}")
+        return None, None
+
+def translate_text(text_to_translate, chunk_size=512):
+    """
+    Translates text to Indonesian using a local Hugging Face model.
+    """
+    model, tokenizer = get_translation_model_and_tokenizer()
+    if model is None or tokenizer is None:
+        return "Error: Translation model not available."
+
+    if not text_to_translate or not text_to_translate.strip():
+        logger.warning("Input text for translation is empty or just whitespace.")
+        return ""
+
+    try:
+        logger.info(f"Translating text locally: {text_to_translate[:50]}...")
+        # Split the text into chunks based on sentences to maintain context
+        sentences = text_to_translate.split('. ')
+        translated_chunks = []
+
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+
+            inputs = tokenizer(sentence, return_tensors="pt", padding=True, truncation=True, max_length=chunk_size)
+            with torch.no_grad():
+                translated_tokens = model.generate(**inputs)
+            
+            decoded = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)
+            
+            if decoded:
+                translated_chunks.append(decoded[0])
+            else:
+                logger.warning(f"Translation of chunk returned empty result: '{sentence[:50]}...'")
+
+        translated_text = '. '.join(translated_chunks)
+        logger.info("Local translation successful.")
+        return translated_text
+
+    except Exception as e:
+        logger.error(f"An error occurred during local translation: {e}")
+        return f"Error: Could not translate text locally. {e}"
+
+
+# Set up Streamlit UI
+st.set_page_config(page_title="🌍 Trafella", layout="wide")
 st.markdown(
     """
     <style>
@@ -106,58 +168,20 @@ st.markdown(
 )
 
 # Title and subtitle
-logger.info("Setting up Streamlit UI")
-st.markdown('<h1 class="title">🌍 Trafella - Your AI Travel Companion</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Plan your dream trip with AI! Get personalized recommendations for flights, hotels, and activities.</p>', unsafe_allow_html=True)
+st.markdown('<h1 class="title">✈️ Trafella - Your AI Travel Companion</h1>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Plan your ideal holiday with AI assistance! Receive customized suggestions for flights, accommodations, and activities.</p>', unsafe_allow_html=True)
 
 # User Inputs Section
-logger.info("Collecting user inputs")
-st.markdown("### 🌍 Where are you headed?")
-source = st.text_input("🛫 Departure City (IATA Code):", "CGK")  # Example: CGK for Jakarta
-destination = st.text_input("🛬 Destination (IATA Code):", "KUL")  # Example: KUL for Kuala Lumpur
+st.markdown("### 🗺️ Enter your travel destinations:")
+source = st.text_input("🛫 Departure City (IATA Code example: CGK for Jakarta):", "CGK")  # Example: CGK for Jakarta
+destination = st.text_input("🛬 Destination (IATA Code example: KUL for Kuala Lumpur):", "KUL")  # Example: KUL for Kuala Lumpur
 
-st.markdown("### 📅 Plan Your Adventure")
-num_days = st.slider("🕒 Trip Duration (days):", 1, 14, 5)
+st.markdown("### 📅 Customize Your Travel")
+num_days = st.slider("🕒 Travel Duration (days):", 1, 14, 5)
 travel_theme = st.selectbox(
     "🎭 Select Your Travel Theme:",
     ["💑 Couple Getaway", "👨‍👩‍👧‍👦 Family Vacation", "🏔️ Adventure Trip", "🧳 Solo Exploration"]
 )
-
-# Divider for aesthetics
-st.markdown("---")
-
-st.markdown(
-    f"""
-    <div style="
-        text-align: center; 
-        padding: 15px; 
-        background-color: #ffecd1; 
-        border-radius: 10px; 
-        margin-top: 20px;
-    ">
-        <h3>🌟 Your {travel_theme} to {destination} is about to begin! 🌟</h3>
-        <p>Let's find the best flights, stays, and experiences for your unforgettable journey.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Function to format ISO datetime string to a human-readable format
-def format_datetime(iso_string):
-    """
-    Converts an ISO datetime string to a human-readable format.
-    
-    Args:
-    iso_string (str): The ISO datetime string to be formatted.
-    
-    Returns:
-    str: The formatted datetime string.
-    """
-    try:
-        dt = datetime.strptime(iso_string, "%Y-%m-%d %H:%M")
-        return dt.strftime("%b-%d, %Y | %I:%M %p")  # Example: Jul-13, 2025 | 6:20 PM
-    except:
-        return "N/A"
 
 activity_preferences = st.text_area(
     "🌍 What activities do you enjoy? (e.g., relaxing on the beach, exploring historical sites, nightlife, adventure)",
@@ -167,8 +191,12 @@ activity_preferences = st.text_area(
 departure_date = st.date_input("Departure Date")
 return_date = st.date_input("Return Date")
 
+# Add language toggle option
+language = st.selectbox("🌐 Language", ["English", "Bahasa Indonesia"])
+
+
 # Sidebar Setup
-st.sidebar.title("🌎 TRAFELLA")
+st.sidebar.title("🌎 Travel Assistant")
 st.sidebar.subheader("Personalize Your Trip")
 
 # Travel Preferences
@@ -187,34 +215,18 @@ params = {
         "api_key": SERPAPI_KEY
     }
 
-# Function to fetch flight data using SerpAPI
+# Function to format datetime
+def format_datetime(iso_string):
+    try:
+        logger.info(f"Formatting datetime: {iso_string}")
+        dt = datetime.strptime(iso_string, "%Y-%m-%d %H:%M")
+        return dt.strftime("%b-%d, %Y | %I:%M %p")  # Example: Jul-21, 2025 | 6:20 PM
+    except:
+        return "N/A"
+
+# Function to fetch flight data
 def fetch_flights(source, destination, departure_date, return_date):
-    """
-    Fetches flight data using SerpAPI.
-    
-    Args:
-    source (str): The departure city IATA code.
-    destination (str): The arrival city IATA code.
-    departure_date (str): The departure date.
-    return_date (str): The return date.
-    
-    Returns:
-    dict: The flight data.
-    """
-    logger.info(f"Fetching flights: {source} to {destination} on {departure_date} to {return_date}")
-    
-    # Create a safe version of params for logging (without API key)
-    log_params = {
-        "engine": "google_flights",
-        "departure_id": source,
-        "arrival_id": destination,
-        "outbound_date": str(departure_date),
-        "return_date": str(return_date),
-        "currency": "IDR",
-        "hl": "en"
-    }
-    logger.info(f"Sending SerpAPI request with parameters: {log_params}")
-    
+    logger.info(f"Fetching flights for {source} to {destination} from {departure_date} to {return_date}")
     params = {
         "engine": "google_flights",
         "departure_id": source,
@@ -225,46 +237,20 @@ def fetch_flights(source, destination, departure_date, return_date):
         "hl": "en",
         "api_key": SERPAPI_KEY
     }
-    
-    try:
-        search = GoogleSearch(params)
-        results = search.get_dict()
-        
-        # Log API response status
-        status = results.get('search_metadata', {}).get('status', 'unknown')
-        logger.info(f"SerpAPI response status: {status}")
-        
-        # Log number of flights found
-        num_flights = len(results.get('best_flights', []))
-        logger.info(f"Received {num_flights} flights from SerpAPI")
-        
-        # Log truncated response for debugging
-        logger.debug(f"SerpAPI response (truncated): {str(results)[:200]}...")
-        
-        return results
-    except Exception as e:
-        logger.error(f"SerpAPI call failed: {str(e)}")
-        return {}
+    search = GoogleSearch(params)
+    results = search.get_dict()
+    logger.info(f"Flight data fetched successfully: {results}")
+    return results
 
-# Function to extract top 3 cheapest flights from flight data
+# Function to extract top 3 cheapest flights
 def extract_cheapest_flights(flight_data):
-    """
-    Extracts the top 3 cheapest flights from the flight data.
-    
-    Args:
-    flight_data (dict): The flight data.
-    
-    Returns:
-    list: The top 3 cheapest flights.
-    """
     logger.info("Extracting cheapest flights")
     best_flights = flight_data.get("best_flights", [])
     sorted_flights = sorted(best_flights, key=lambda x: x.get("price", float("inf")))[:3]  # Get top 3 cheapest
     logger.info(f"Top 3 cheapest flights extracted: {len(sorted_flights)} flights found")
     return sorted_flights
 
-# Initialize AI agents for travel planning
-# Researcher agent gathers destination information
+# AI Agents
 researcher = Agent(
     name="Researcher",
     instructions=[
@@ -280,7 +266,6 @@ researcher = Agent(
     add_datetime_to_instructions=True,
 )
 
-# Planner agent creates detailed itineraries
 planner = Agent(
     name="Planner",
     instructions=[
@@ -294,7 +279,6 @@ planner = Agent(
     add_datetime_to_instructions=True,
 )
 
-# Hotel/Restaurant finder agent locates accommodations and dining
 hotel_restaurant_finder = Agent(
     name="Hotel & Restaurant Finder",
     instructions=[
@@ -309,65 +293,57 @@ hotel_restaurant_finder = Agent(
     add_datetime_to_instructions=True,
 )
 
-# Main execution block: Generate travel plan when button is clicked
+# Generate Travel Plan
 if st.button("🚀 Generate Travel Plan"):
-    """
-    Generates a travel plan based on user input.
-    """
-
-    datetime_now = datetime.now()
-    logger.info("Generate Travel Plan Start" + str(datetime_now))
     with st.spinner("✈️ Fetching best flight options..."):
-        logger.info("Starting flight search")
+        logger.info("Fetching flights")
         flight_data = fetch_flights(source, destination, departure_date, return_date)
+        logger.info(f"Flight data fetched successfully: {flight_data}")
         cheapest_flights = extract_cheapest_flights(flight_data)
+        logger.info(f"Cheapest flights extracted: {cheapest_flights}")
 
     # AI Processing
-    with st.spinner("🔍 Researching destination..."):
-        logger.info("Starting destination research")
+    with st.spinner("🔍 Researching best attractions & activities..."):
+        logger.info("Researching attractions and activities")
         research_prompt = (
             f"Research the best attractions and activities in {destination} for a {num_days}-day {travel_theme.lower()} trip. "
             f"The traveler enjoys: {activity_preferences}. Budget: {budget}. Flight Class: {flight_class}. "
             f"Hotel Rating: {hotel_rating}."
         )
+        logger.info(f"Research prompt: {research_prompt}")
         research_results = researcher.run(research_prompt, stream=False)
-        logger.info(f"Research results: {research_results.content[:100]}...")
+        logger.info(f"Research results: {research_results}")
 
-    with st.spinner("🏨 Finding hotels & restaurants..."):
-        logger.info("Starting hotel/restaurant search")
-        # Try to extract attractions from itinerary, then research, fallback to activity preferences
-        attractions_or_itinerary = ""
-        if 'itinerary' in locals() and hasattr(itinerary, "content") and itinerary.content.strip():
-            attractions_or_itinerary = itinerary.content[:300]
-        elif 'research_results' in locals() and hasattr(research_results, "content") and research_results.content.strip():
-            attractions_or_itinerary = research_results.content[:300]
-        else:
-            attractions_or_itinerary = activity_preferences
-
+    with st.spinner("🏨 Searching for hotels & restaurants..."):
+        logger.info("Searching for hotels and restaurants")
         hotel_restaurant_prompt = (
-            # f"Find the best hotels and restaurants near popular attractions in {destination} for a {travel_theme.lower()} trip. "
-            f"Find the best hotels and restaurants near these attractions or itinerary points in {destination}: {attractions_or_itinerary}. "
+            f"Find the best hotels and restaurants near popular attractions in {destination} for a {travel_theme.lower()} trip. "
             f"Budget: {budget}. Hotel Rating: {hotel_rating}. Preferred activities: {activity_preferences}."
         )
+        logger.info(f"Hotel and restaurant prompt: {hotel_restaurant_prompt}")
         hotel_restaurant_results = hotel_restaurant_finder.run(hotel_restaurant_prompt, stream=False)
-        logger.info(f"Hotel/restaurant results: {hotel_restaurant_results.content[:100]}...")
+        logger.info(f"Hotel and restaurant results: {hotel_restaurant_results}")
 
     with st.spinner("🗺️ Creating your personalized itinerary..."):
-        logger.info("Generating itinerary")
+        logger.info("Creating itinerary")
         planning_prompt = (
             f"Based on the following data, create a {num_days}-day itinerary for a {travel_theme.lower()} trip to {destination}. "
             f"The traveler enjoys: {activity_preferences}. Budget: {budget}. Flight Class: {flight_class}. Hotel Rating: {hotel_rating}. "
-            f"Research: {research_results.content}. Flights: {json.dumps(cheapest_flights)}. Hotels & Restaurants: {hotel_restaurant_results.content}."
+            f"Research: {research_results.content}. "
+            f"Flights: {json.dumps(cheapest_flights)}. Hotels & Restaurants: {hotel_restaurant_results.content}."
         )
+        logger.info(f"Planning prompt: {planning_prompt}")
         itinerary = planner.run(planning_prompt, stream=False)
-        logger.info(f"Itinerary generated: {itinerary.content[:100]}...")
+        logger.info(f"Itinerary: {itinerary}")
 
     # Display Results
     st.subheader("✈️ Cheapest Flight Options")
     if cheapest_flights:
+        logger.info("Displaying cheapest flight options")
         cols = st.columns(len(cheapest_flights))
         for idx, flight in enumerate(cheapest_flights):
             with cols[idx]:
+                logger.info(f"Displaying flight {idx + 1}")
                 airline_logo = flight.get("airline_logo", "")
                 airline_name = flight.get("airline", "Unknown Airline")
                 price = flight.get("price", "Not Available")
@@ -384,6 +360,7 @@ if st.button("🚀 Generate Travel Plan"):
                 departure_token = flight.get("departure_token", "")
 
                 if departure_token:
+                    logger.info("Fetching booking options")
                     params_with_token = {
                         **params,
                         "departure_token": departure_token  # Add the token here
@@ -394,7 +371,7 @@ if st.button("🚀 Generate Travel Plan"):
                     booking_options = results_with_booking['best_flights'][idx]['booking_token']
 
                 booking_link = f"https://www.google.com/travel/flights?tfs="+booking_options if booking_options else "#"
-                print(booking_link)
+                logger.info(f"Booking link: {booking_link}")
                 # Flight card layout
                 st.markdown(
                     f"""
@@ -429,70 +406,29 @@ if st.button("🚀 Generate Travel Plan"):
                     unsafe_allow_html=True
                 )
     else:
+        logger.info("No flight data available")
         st.warning("⚠️ No flight data available.")
 
     st.subheader("🏨 Hotels & Restaurants")
-    st.write(hotel_restaurant_results.content)
+    logger.info("Displaying hotels and restaurants")
+    if language == "Bahasa Indonesia":
+        logger.info(f"Hotels and restaurants before translation: {hotel_restaurant_results.content}")
+        translated_content = translate_text(hotel_restaurant_results.content)
+        logger.info(f"Translated hotels and restaurants: {translated_content}")
+        st.write(translated_content)
+    else:
+        logger.info(f"Hotels and restaurants: {hotel_restaurant_results.content}")
+        st.write(hotel_restaurant_results.content)
 
     st.subheader("🗺️ Your Personalized Itinerary")
-    st.write(itinerary.content)
+    logger.info("Displaying itinerary")
+    if language == "Bahasa Indonesia":
+        logger.info(f"Itinerary before translation: {itinerary.content}")
+        translated_content = translate_text(itinerary.content)
+        logger.info(f"Translated itinerary: {translated_content}")
+        st.write(translated_content)
+    else:
+        logger.info(f"Itinerary: {itinerary.content}")
+        st.write(itinerary.content)
 
-    logger.info("Travel plan generation complete")
-
-    # --- PDF Download Section ---
-    from fpdf import FPDF
-    import tempfile
-
-    def generate_pdf(flights, research, hotels, itinerary):
-        # Sanitize text to prevent UnicodeEncodeError with fpdf
-        def sanitize(text):
-            return str(text).encode('latin-1', 'replace').decode('latin-1')
-
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
-
-        pdf.cell(0, 10, "Trafella AI Travel Plan", ln=True, align="C")
-        pdf.ln(8)
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, "Flight Options:", ln=True)
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 8, sanitize(flights))
-        pdf.ln(2)
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, "Destination Research:", ln=True)
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 8, sanitize(research))
-        pdf.ln(2)
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, "Hotels & Restaurants:", ln=True)
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 8, sanitize(hotels))
-        pdf.ln(2)
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, "Itinerary:", ln=True)
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 8, sanitize(itinerary))
-        return pdf
-
-    # Prepare content for PDF
-    flights_str = str(cheapest_flights)
-    research_str = research_results.content if hasattr(research_results, 'content') else str(research_results)
-    hotels_str = hotel_restaurant_results.content if hasattr(hotel_restaurant_results, 'content') else str(hotel_restaurant_results)
-    itinerary_str = itinerary.content if hasattr(itinerary, 'content') else str(itinerary)
-
-    pdf = generate_pdf(flights_str, research_str, hotels_str, itinerary_str)
-    tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    pdf.output(tmp_pdf.name)
-    tmp_pdf.close()
-
-    with open(tmp_pdf.name, "rb") as f:
-        st.download_button("Download Travel Plan as PDF", f.read(), file_name="trafella_travel_plan.pdf", mime="application/pdf")
-    logger.info("Travel plan generated successfully")
     st.success("✅ Travel plan generated successfully!")
-
-    # Log final results
-    logger.info(f"Cheapest flights: {json.dumps(cheapest_flights, indent=2)}")
-    logger.info(f"Hotels & Restaurants: {hotel_restaurant_results.content}")
-    logger.info(f"Itinerary: {itinerary.content}")
-    logger.info("Generate Travel Plan End" + str(datetime_now))

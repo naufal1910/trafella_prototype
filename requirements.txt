@@ -1,6 +1,9 @@
 streamlit
 google-search-results
 agno
-logging
-google-genai
-fpdf
+google-generativeai
+fpdf2
+requests
+transformers
+torch
+sentencepiece
