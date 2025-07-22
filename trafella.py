@@ -1,34 +1,42 @@
 """
 Trafella - Your AI Travel Companion
 ----------------------------------
-Trafella is an intelligent travel planning assistant that helps you discover and plan your perfect trip by providing:
-- ✈️ Flight options and booking information
-- 🌍 Comprehensive destination insights
-- 📅 Personalized daily itineraries
-- 🏨 Curated hotel and restaurant recommendations
+Trafella is a web-based travel planning application using Streamlit.
+It leverages AI to provide flight options, destination information, personalized
+itineraries, and hotel/restaurant recommendations.
 
-Powered by:
-1. Streamlit for intuitive web interface
-2. Google's Gemini AI for intelligent planning
-3. SerpAPI for real-time flight data
-4. Advanced travel planning algorithms
+Key functionalities:
+- User input for travel details (destination, dates, preferences).
+- API integration with SerpAPI for real-time flight data.
+- AI-powered planning using Google's Gemini model.
+- Local translation for multilingual support.
+- Secure handling of API keys using Streamlit's session state.
 """
 
+# ==============================================================================
+# 1. LIBRARY IMPORTS
+# ==============================================================================
 # Import necessary libraries
-import streamlit as st
-import json
-import os
-import logging
-from datetime import datetime
-from serpapi.google_search import GoogleSearch 
-from agno.agent import Agent
-from agno.tools.serpapi import SerpApiTools
-from agno.models.google import Gemini
-from transformers import MarianMTModel, MarianTokenizer
-import torch
-import time
+import streamlit as st  # Main library for building the web interface
+import json  # For working with JSON data structures
+import os  # For interacting with the operating system (environment variables, etc.)
+import logging  # For application logging and debugging
+from datetime import datetime  # For handling dates and times
+from serpapi.google_search import GoogleSearch  # For fetching flight data from SerpAPI
+from agno.agent import Agent  # For creating AI agents
+from agno.tools.serpapi import SerpApiTools  # SerpAPI tools for AI agents
+from agno.models.google import Gemini  # Google's Gemini AI model integration
+from transformers import MarianMTModel, MarianTokenizer  # For local text translation
+import torch  # PyTorch for machine learning operations
 
-# Configure logging
+# ==============================================================================
+# 2. INITIAL SETUP AND CONFIGURATION
+# ==============================================================================
+
+# --- Logging Configuration ---
+# Sets up a logging system to record application events. This is crucial for
+# debugging and monitoring the application's behavior. Logs are saved to a
+# file named with the current date.
 log_filename = datetime.now().strftime("%Y%m%d") + "-trafella.log"
 logging.basicConfig(
     filename=log_filename,
@@ -39,7 +47,11 @@ logging.basicConfig(
 logger = logging.getLogger("Trafella")
 logger.info("Application started")
 
-# --- API Key Handling: Store in session_state, not in any file ---
+# --- API Key Management ---
+# This section handles the API keys required for SerpAPI (flight data) and
+# Google (AI models). It securely prompts the user for their keys and stores
+# them in Streamlit's session state, which is temporary and browser-based.
+# The application will not proceed until the keys are provided.
 if "SERPAPI_KEY" not in st.session_state or "GOOGLE_API_KEY" not in st.session_state:
     with st.sidebar.expander("🔑 API Keys Setup", expanded=True):
         st.markdown("### 🔑 API Keys Required")
@@ -74,7 +86,10 @@ if "SERPAPI_KEY" not in st.session_state or "GOOGLE_API_KEY" not in st.session_s
     st.warning("Please enter your API keys in the sidebar to continue.")
     st.stop()
 
-# Use keys from session_state
+# --- Load API Keys from Session State ---
+# Once the user provides the keys, they are loaded from the session state into
+# variables for use throughout the application. The Google API key is also set
+# as an environment variable, as required by the Gemini model's library.
 SERPAPI_KEY = st.session_state["SERPAPI_KEY"]
 GOOGLE_API_KEY = st.session_state["GOOGLE_API_KEY"]
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY  # For Gemini agent
@@ -82,6 +97,15 @@ os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY  # For Gemini agent
 # Log API key status (without exposing actual keys)
 logger.info("API keys set in session_state")
 
+# ==============================================================================
+# 3. TRANSLATION FUNCTIONALITY
+# ==============================================================================
+
+# --- Translation Model Loading ---
+# This function loads a pre-trained translation model from Hugging Face.
+# The `@st.cache_resource` decorator ensures the model is loaded only once
+# and cached, which significantly improves performance by avoiding repeated
+# downloads and loading on each script rerun.
 @st.cache_resource
 def get_translation_model_and_tokenizer():
     """
@@ -99,6 +123,10 @@ def get_translation_model_and_tokenizer():
         logger.error(f"Failed to load translation model: {e}")
         return None, None
 
+# --- Text Translation Function ---
+# This function takes English text as input and translates it into Bahasa
+# Indonesia. It handles the text in smaller chunks (sentences) to avoid
+# overwhelming the model and to maintain context during translation.
 def translate_text(text_to_translate, chunk_size=512):
     """
     Translates text to Indonesian using a local Hugging Face model.
@@ -141,7 +169,14 @@ def translate_text(text_to_translate, chunk_size=512):
         return f"Error: Could not translate text locally. {e}"
 
 
-# Set up Streamlit UI
+# ==============================================================================
+# 4. USER INTERFACE (UI) SETUP
+# ==============================================================================
+
+# --- Page and Style Configuration ---
+# This section configures the main Streamlit page, setting the title and layout.
+# It also injects custom CSS to style the title, subtitle, and other elements
+# for a more polished look.
 st.set_page_config(page_title="🌍 Trafella", layout="wide")
 st.markdown(
     """
@@ -167,11 +202,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Title and subtitle
+# --- Main Title and Subtitle ---
+# Displays the main header and a brief description of the application at the
+# top of the page.
 st.markdown('<h1 class="title">✈️ Trafella - Your AI Travel Companion</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Plan your ideal holiday with AI assistance! Receive customized suggestions for flights, accommodations, and activities.</p>', unsafe_allow_html=True)
 
-# User Inputs Section
+# --- Main User Input Section ---
+# This is where the user enters the core details of their trip, such as
+# departure/destination cities, travel duration, theme, and activity
+# preferences. These inputs are the foundation for the AI's planning process.
 st.markdown("### 🗺️ Enter your travel destinations:")
 source = st.text_input("🛫 Departure City (IATA Code example: CGK for Jakarta):", "CGK")  # Example: CGK for Jakarta
 destination = st.text_input("🛬 Destination (IATA Code example: KUL for Kuala Lumpur):", "KUL")  # Example: KUL for Kuala Lumpur
@@ -195,7 +235,10 @@ return_date = st.date_input("Return Date")
 language = st.selectbox("🌐 Language", ["English", "Bahasa Indonesia"])
 
 
-# Sidebar Setup
+# --- Sidebar for Additional Preferences ---
+# The sidebar contains more granular options for personalizing the trip,
+# including budget, flight class, and preferred hotel rating. This allows
+# for more tailored recommendations.
 st.sidebar.title("🌎 Travel Assistant")
 st.sidebar.subheader("Personalize Your Trip")
 
@@ -215,15 +258,26 @@ params = {
         "api_key": SERPAPI_KEY
     }
 
+# ==============================================================================
+# 5. DATA FETCHING AND PROCESSING FUNCTIONS
+# ==============================================================================
+
+# --- Datetime Formatting Function ---
+# A helper function to convert date strings from the API into a more
+# readable format (e.g., "Jul-21, 2025 | 6:20 PM").
 # Function to format datetime
 def format_datetime(iso_string):
     try:
         logger.info(f"Formatting datetime: {iso_string}")
         dt = datetime.strptime(iso_string, "%Y-%m-%d %H:%M")
         return dt.strftime("%b-%d, %Y | %I:%M %p")  # Example: Jul-21, 2025 | 6:20 PM
-    except:
+    except ValueError as e:
+        logger.error(f"Error formatting datetime: {e}")
         return "N/A"
 
+# --- Flight Data Fetching Function ---
+# This function calls the SerpAPI Google Flights endpoint with the user's
+# travel details to get real-time flight information.
 # Function to fetch flight data
 def fetch_flights(source, destination, departure_date, return_date):
     logger.info(f"Fetching flights for {source} to {destination} from {departure_date} to {return_date}")
@@ -242,6 +296,9 @@ def fetch_flights(source, destination, departure_date, return_date):
     logger.info(f"Flight data fetched successfully: {results}")
     return results
 
+# --- Flight Data Extraction Function ---
+# After fetching the flight data, this function processes the results to
+# find and return the top 3 cheapest flight options.
 # Function to extract top 3 cheapest flights
 def extract_cheapest_flights(flight_data):
     logger.info("Extracting cheapest flights")
@@ -250,7 +307,16 @@ def extract_cheapest_flights(flight_data):
     logger.info(f"Top 3 cheapest flights extracted: {len(sorted_flights)} flights found")
     return sorted_flights
 
-# AI Agents
+# ==============================================================================
+# 6. AI AGENT CONFIGURATION
+# ==============================================================================
+# This section defines the specialized AI agents that will handle different
+# parts of the travel planning task. Each agent has a specific role and set
+# of instructions.
+
+# --- Researcher Agent ---
+# This agent is responsible for gathering general information about the
+# destination, including attractions, culture, and safety tips.
 researcher = Agent(
     name="Researcher",
     instructions=[
@@ -266,6 +332,9 @@ researcher = Agent(
     add_datetime_to_instructions=True,
 )
 
+# --- Planner Agent ---
+# The planner agent takes all the gathered information (research, flights,
+# hotels) and synthesizes it into a structured, day-by-day itinerary.
 planner = Agent(
     name="Planner",
     instructions=[
@@ -279,6 +348,9 @@ planner = Agent(
     add_datetime_to_instructions=True,
 )
 
+# --- Hotel & Restaurant Finder Agent ---
+# This agent specializes in finding accommodation and dining options that
+# match the user's preferences for budget, rating, and location.
 hotel_restaurant_finder = Agent(
     name="Hotel & Restaurant Finder",
     instructions=[
@@ -293,7 +365,15 @@ hotel_restaurant_finder = Agent(
     add_datetime_to_instructions=True,
 )
 
-# Generate Travel Plan
+# ==============================================================================
+# 7. MAIN APPLICATION LOGIC
+# ==============================================================================
+# This section contains the main logic of the application, including fetching
+# flight data, running the AI agents, and displaying the results.
+
+# --- Travel Plan Generation Trigger ---
+# This is the main execution block of the application. It runs when the user
+# clicks the "Generate Travel Plan" button.
 if st.button("🚀 Generate Travel Plan"):
     with st.spinner("✈️ Fetching best flight options..."):
         logger.info("Fetching flights")
@@ -302,7 +382,10 @@ if st.button("🚀 Generate Travel Plan"):
         cheapest_flights = extract_cheapest_flights(flight_data)
         logger.info(f"Cheapest flights extracted: {cheapest_flights}")
 
-    # AI Processing
+    # --- AI-Powered Data Processing ---
+    # This block orchestrates the AI agents. It shows spinners to the user
+    # while the agents perform their tasks: researching the destination,
+    # finding hotels/restaurants, and creating the final itinerary.
     with st.spinner("🔍 Researching best attractions & activities..."):
         logger.info("Researching attractions and activities")
         research_prompt = (
@@ -336,7 +419,15 @@ if st.button("🚀 Generate Travel Plan"):
         itinerary = planner.run(planning_prompt, stream=False)
         logger.info(f"Itinerary: {itinerary}")
 
-    # Display Results
+        # ==============================================================================
+    # 8. RESULTS DISPLAY
+    # ==============================================================================
+    # After the AI has finished processing, this section displays the results
+    # to the user in a structured and visually appealing format.
+
+    # --- Display Flight Options ---
+    # Renders the top 3 cheapest flight options in a card layout, including
+    # airline logos, prices, and direct booking links.
     st.subheader("✈️ Cheapest Flight Options")
     if cheapest_flights:
         logger.info("Displaying cheapest flight options")
@@ -409,17 +500,9 @@ if st.button("🚀 Generate Travel Plan"):
         logger.info("No flight data available")
         st.warning("⚠️ No flight data available.")
 
-    st.subheader("🏨 Hotels & Restaurants")
-    logger.info("Displaying hotels and restaurants")
-    if language == "Bahasa Indonesia":
-        logger.info(f"Hotels and restaurants before translation: {hotel_restaurant_results.content}")
-        translated_content = translate_text(hotel_restaurant_results.content)
-        logger.info(f"Translated hotels and restaurants: {translated_content}")
-        st.write(translated_content)
-    else:
-        logger.info(f"Hotels and restaurants: {hotel_restaurant_results.content}")
-        st.write(hotel_restaurant_results.content)
-
+    # --- Display Personalized Itinerary ---
+    # Presents the final, detailed travel plan created by the Planner agent.
+    # The content is translated if needed.
     st.subheader("🗺️ Your Personalized Itinerary")
     logger.info("Displaying itinerary")
     if language == "Bahasa Indonesia":
