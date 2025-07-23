@@ -1,0 +1,9 @@
+streamlit
+google-search-results
+agno
+google-generativeai
+fpdf2
+requests
+transformers
+torch
+sentencepiece
