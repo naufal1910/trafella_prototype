@@ -2,7 +2,7 @@
 
 Trafella is a web-based travel planning application built with Streamlit that acts as your personal AI travel assistant. It helps you plan your perfect trip by providing real-time flight options, detailed destination information, personalized itineraries, and recommendations for hotels and restaurants.
 
-##demo
+## demo
 https://trafella.streamlit.app/
 
 ## ✨ Features
